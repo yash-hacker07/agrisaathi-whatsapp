@@ -216,58 +216,125 @@ async def verify_webhook(
     raise HTTPException(status_code=403, detail="Verification failed")
 
 
+def _run_process_text(text: str, sender: str, lang_code: str):
+    """Wrapper around process_text with top-level exception logging."""
+    logger.info("bg_task:process_text: starting | sender=%s | lang=%s | text_preview=%s", sender, lang_code, text[:80])
+    try:
+        process_text(text, sender, lang_code)
+        logger.info("bg_task:process_text: completed | sender=%s", sender)
+    except Exception as exc:
+        logger.exception("bg_task:process_text: unhandled exception | sender=%s | error=%s", sender, exc)
+
+def _run_process_image(media_id: str, sender: str, lang_code: str):
+    """Wrapper around process_image with top-level exception logging."""
+    logger.info("bg_task:process_image: starting | sender=%s | media_id=%s | lang=%s", sender, media_id, lang_code)
+    try:
+        process_image(media_id, sender, lang_code)
+        logger.info("bg_task:process_image: completed | sender=%s", sender)
+    except Exception as exc:
+        logger.exception("bg_task:process_image: unhandled exception | sender=%s | error=%s", sender, exc)
+
+def _run_process_location(lat: float, lon: float, sender: str, lang_code: str):
+    """Wrapper around process_location with top-level exception logging."""
+    logger.info("bg_task:process_location: starting | sender=%s | lat=%s | lon=%s | lang=%s", sender, lat, lon, lang_code)
+    try:
+        process_location(lat, lon, sender, lang_code)
+        logger.info("bg_task:process_location: completed | sender=%s", sender)
+    except Exception as exc:
+        logger.exception("bg_task:process_location: unhandled exception | sender=%s | error=%s", sender, exc)
+
+
 @router.post("/api/whatsapp/webhook/")
 async def whatsapp_webhook(
     request: Request,
     background_tasks: BackgroundTasks
 ):
     """Main Meta WhatsApp Webhook endpoint."""
+    logger.info("whatsapp_webhook: received POST request")
+
     try:
         body = await request.json()
-    except:
+    except Exception as exc:
+        logger.error("whatsapp_webhook: failed to parse JSON body | error=%s", exc)
         return {"status": "error", "message": "Invalid JSON"}
+
+    logger.info(
+        "whatsapp_webhook: payload parsed | object=%s | entry_count=%d",
+        body.get("object"),
+        len(body.get("entry", [])),
+    )
 
     # Validate that this is a WhatsApp API event
     if body.get("object") != "whatsapp_business_account":
+        logger.warning("whatsapp_webhook: unexpected object type=%s — ignoring", body.get("object"))
         return {"status": "ignored"}
-        
-    for entry in body.get("entry", []):
-        for change in entry.get("changes", []):
+
+    for entry_idx, entry in enumerate(body.get("entry", [])):
+        for change_idx, change in enumerate(entry.get("changes", [])):
             value = change.get("value", {})
             messages = value.get("messages", [])
-            
-            for msg in messages:
+
+            logger.info(
+                "whatsapp_webhook: entry[%d] change[%d] | message_count=%d",
+                entry_idx, change_idx, len(messages),
+            )
+
+            for msg_idx, msg in enumerate(messages):
                 sender = msg.get("from")
                 msg_type = msg.get("type")
-                
+
+                logger.info(
+                    "whatsapp_webhook: message[%d] | sender=%s | type=%s",
+                    msg_idx, sender, msg_type,
+                )
+
                 # Language Detection Phase
                 lang_code = USER_LANGUAGES.get(sender, "en")
-                
+
                 if msg_type == "text":
                     text = msg.get("text", {}).get("body", "")
-                    
+
                     # Auto-detect language on first text message
                     if sender not in USER_LANGUAGES and text:
                         detected_lang = detect_text_language(text)
-                        if len(detected_lang) == 2: # basic validation
+                        if len(detected_lang) == 2:  # basic validation
                             USER_LANGUAGES[sender] = detected_lang
                             lang_code = detected_lang
-                            
-                    background_tasks.add_task(process_text, text, sender, lang_code)
-                    
+                            logger.info("whatsapp_webhook: language detected | sender=%s | lang=%s", sender, lang_code)
+
+                    logger.info("whatsapp_webhook: queuing process_text task | sender=%s | lang=%s", sender, lang_code)
+                    try:
+                        background_tasks.add_task(_run_process_text, text, sender, lang_code)
+                        logger.info("whatsapp_webhook: process_text task queued | sender=%s", sender)
+                    except Exception as exc:
+                        logger.exception("whatsapp_webhook: failed to queue process_text task | sender=%s | error=%s", sender, exc)
+
                 elif msg_type == "image":
                     media_id = msg.get("image", {}).get("id")
-                    background_tasks.add_task(process_image, media_id, sender, lang_code)
-                    
+                    logger.info("whatsapp_webhook: queuing process_image task | sender=%s | media_id=%s", sender, media_id)
+                    try:
+                        background_tasks.add_task(_run_process_image, media_id, sender, lang_code)
+                        logger.info("whatsapp_webhook: process_image task queued | sender=%s", sender)
+                    except Exception as exc:
+                        logger.exception("whatsapp_webhook: failed to queue process_image task | sender=%s | error=%s", sender, exc)
+
                 elif msg_type == "location":
                     lat = msg.get("location", {}).get("latitude")
                     lon = msg.get("location", {}).get("longitude")
-                    background_tasks.add_task(process_location, lat, lon, sender, lang_code)
-                    
+                    logger.info("whatsapp_webhook: queuing process_location task | sender=%s | lat=%s | lon=%s", sender, lat, lon)
+                    try:
+                        background_tasks.add_task(_run_process_location, lat, lon, sender, lang_code)
+                        logger.info("whatsapp_webhook: process_location task queued | sender=%s", sender)
+                    except Exception as exc:
+                        logger.exception("whatsapp_webhook: failed to queue process_location task | sender=%s | error=%s", sender, exc)
+
                 else:
+                    logger.warning("whatsapp_webhook: unsupported message type=%s | sender=%s", msg_type, sender)
                     send_whatsapp_reply(sender, f"Unsupported message type: {msg_type}. Please send text, an image, or a location.", lang_code)
-                    
+
+    logger.info("whatsapp_webhook: returning success")
     return {"status": "success"}
+
 
 @router.get("/api/whatsapp/status")
 def whatsapp_status():
