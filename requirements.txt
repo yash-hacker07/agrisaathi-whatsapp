@@ -1,0 +1,39 @@
+# AgriSaathi Core Features — Requirements
+# Dependencies for the 8 core PS08 features + CNN Disease Detection + WhatsApp Bot
+
+# ── Web Framework ──
+fastapi
+uvicorn[standard]
+pydantic-settings
+python-dotenv
+python-multipart
+
+# ── HTTP Clients ──
+requests
+httpx
+
+# ── AI / LLM ──
+groq
+
+# ── Translation ──
+deep-translator
+
+# ── Voice (IVR + TTS) ──
+twilio
+gTTS
+
+# ── Data Processing ──
+numpy
+
+# ── ML Training & Inference ──
+scikit-learn
+pandas
+joblib
+tensorflow
+pillow
+
+# ── Dataset Download ──
+kaggle
+
+# ── Database ──
+supabase
