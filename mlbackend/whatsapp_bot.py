@@ -172,7 +172,7 @@ def process_location(lat: float, lon: float, sender: str, lang_code: str):
     send_whatsapp_reply(sender, reply, lang_code)
 
 
-@router.get("/api/whatsapp/webhook")
+@router.get("/api/whatsapp/webhook/")
 async def verify_webhook(
     hub_mode: str = Query(None, alias="hub.mode"),
     hub_challenge: str = Query(None, alias="hub.challenge"),
@@ -188,7 +188,7 @@ async def verify_webhook(
     raise HTTPException(status_code=403, detail="Verification failed")
 
 
-@router.post("/api/whatsapp/webhook")
+@router.post("/api/whatsapp/webhook/")
 async def whatsapp_webhook(
     request: Request,
     background_tasks: BackgroundTasks
