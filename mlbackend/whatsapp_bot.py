@@ -7,10 +7,13 @@ Includes Language Auto-Detection and Feature Menu.
 """
 
 import os
+import logging
 import requests
 from fastapi import APIRouter, Request, BackgroundTasks, Query, HTTPException
 from fastapi.responses import PlainTextResponse
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from .services import translate_text, detect_language_from_coords
 from .llm_service import get_llm_response
@@ -41,10 +44,19 @@ def send_whatsapp_reply(to_number: str, message: str, lang_code: str = "en"):
         except:
             pass # fallback to English if translation fails
 
-    if not token or not phone_id:
-        print(f"Simulation Mode WhatsApp Reply to {to_number} (Lang: {lang_code}):\n{message}")
+    if not token and not phone_id:
+        logger.warning("send_whatsapp_reply: META_WHATSAPP_TOKEN and META_PHONE_NUMBER_ID are both missing — running in simulation mode")
+        logger.info("Simulation reply to %s (lang=%s): %s", to_number, lang_code, message)
         return
-        
+
+    if not token:
+        logger.warning("send_whatsapp_reply: META_WHATSAPP_TOKEN is missing — cannot send reply to %s", to_number)
+        return
+
+    if not phone_id:
+        logger.warning("send_whatsapp_reply: META_PHONE_NUMBER_ID is missing — cannot send reply to %s", to_number)
+        return
+
     url = f"https://graph.facebook.com/v17.0/{phone_id}/messages"
     headers = {
         "Authorization": f"Bearer {token}",
@@ -56,13 +68,20 @@ def send_whatsapp_reply(to_number: str, message: str, lang_code: str = "en"):
         "type": "text",
         "text": {"body": message}
     }
-    
+
+    logger.info("send_whatsapp_reply: POST %s | to=%s | lang=%s | body_length=%d", url, to_number, lang_code, len(message))
+
     try:
-        requests.post(url, headers=headers, json=payload, timeout=10)
-        # Log bot reply
-        log_message(to_number, "bot", "text", message)
+        response = requests.post(url, headers=headers, json=payload, timeout=10)
+        logger.info("send_whatsapp_reply: response status=%d | to=%s", response.status_code, to_number)
+        if not response.ok:
+            logger.error("send_whatsapp_reply: API error | status=%d | body=%s", response.status_code, response.text)
+        else:
+            logger.info("send_whatsapp_reply: reply sent successfully to %s", to_number)
+            # Log bot reply
+            log_message(to_number, "bot", "text", message)
     except Exception as e:
-        print(f"Meta WhatsApp Error: {e}")
+        logger.exception("send_whatsapp_reply: exception while sending reply to %s: %s", to_number, e)
 
 def get_feature_menu() -> str:
     return """🌾 *AgriSaathi Features:*
@@ -74,6 +93,7 @@ How can I help you today?"""
 
 def process_image(media_id: str, sender: str, lang_code: str):
     """Downloads image from Meta API and runs CNN inference."""
+    logger.info("process_image: called | sender=%s | media_id=%s | lang=%s", sender, media_id, lang_code)
     log_message(sender, "user", "image", "Sent an image for disease detection.")
     token = settings.META_WHATSAPP_TOKEN
     
@@ -84,6 +104,7 @@ def process_image(media_id: str, sender: str, lang_code: str):
         
     try:
         # Step 1: Get Media URL from Media ID
+        logger.info("process_image: fetching media URL for media_id=%s", media_id)
         url_res = requests.get(
             f"https://graph.facebook.com/v17.0/{media_id}",
             headers={"Authorization": f"Bearer {token}"},
@@ -102,6 +123,7 @@ def process_image(media_id: str, sender: str, lang_code: str):
         image_bytes = img_res.content
         
         # Run CNN inference
+        logger.info("process_image: running CNN inference for sender=%s | image_size=%d bytes", sender, len(image_bytes))
         result = disease_classifier.classify_image(image_bytes)
         
         if "error" in result:
@@ -114,10 +136,12 @@ def process_image(media_id: str, sender: str, lang_code: str):
         send_whatsapp_reply(sender, reply, lang_code)
         
     except Exception as e:
+        logger.exception("process_image: exception for sender=%s: %s", sender, e)
         send_whatsapp_reply(sender, f"Sorry, an error occurred while analyzing the image: {str(e)}", lang_code)
 
 def process_text(text: str, sender: str, lang_code: str):
     """Processes natural language questions using LLM."""
+    logger.info("process_text: called | sender=%s | lang=%s | text_preview=%s", sender, lang_code, text[:80])
     text_lower = text.strip().lower()
     
     # Log user message
@@ -140,11 +164,14 @@ def process_text(text: str, sender: str, lang_code: str):
     sys_prompt = "You are AgriSaathi, an expert AI agricultural advisor. Give short, direct answers formatted for WhatsApp (use emojis, short paragraphs). Assume the farmer is in India. Provide your response in English; it will be translated later."
     prompt = f"Farmer asks: {text}"
     
+    logger.info("process_text: calling LLM for sender=%s", sender)
     reply = get_llm_response(prompt=prompt, system_prompt=sys_prompt)
+    logger.info("process_text: LLM reply received for sender=%s | reply_length=%d", sender, len(reply))
     send_whatsapp_reply(sender, reply, lang_code)
 
 def process_location(lat: float, lon: float, sender: str, lang_code: str):
     """Processes a location pin."""
+    logger.info("process_location: called | sender=%s | lat=%s | lon=%s | lang=%s", sender, lat, lon, lang_code)
     log_message(sender, "user", "location", f"Sent location pin ({lat}, {lon})")
     from .main import crop_risk_intelligence, CropRiskRequest
     
@@ -167,6 +194,7 @@ def process_location(lat: float, lon: float, sender: str, lang_code: str):
             f"🤖 *AI Advice:*\n{risk_data['ai_advice']}"
         )
     except Exception as e:
+        logger.exception("process_location: exception fetching risk data for sender=%s: %s", sender, e)
         reply = f"Received location: {lat}, {lon} in {state}. Could not fetch weather risk data: {e}"
         
     send_whatsapp_reply(sender, reply, lang_code)
