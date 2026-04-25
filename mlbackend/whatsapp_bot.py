@@ -75,6 +75,7 @@ def send_whatsapp_reply(to_number: str, message: str, lang_code: str = "en"):
         response = requests.post(url, headers=headers, json=payload, timeout=10)
         logger.info("send_whatsapp_reply: response status=%d | to=%s", response.status_code, to_number)
         if not response.ok:
+            print(f"\n\n🚨 META API REJECTED THE MESSAGE! 🚨\nStatus: {response.status_code}\nResponse: {response.text}\n\n")
             logger.error("send_whatsapp_reply: API error | status=%d | body=%s", response.status_code, response.text)
         else:
             logger.info("send_whatsapp_reply: reply sent successfully to %s", to_number)
